@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobile Link Extractor</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 15px;
+            background-color: #f4f4f7;
+            color: #333;
+        }
+        h2 { margin-top: 0; font-size: 1.4rem; color: #111; }
+        .section {
+            background: #fff;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 15px;
+        }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
+        input[type="text"], textarea {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 1rem;
+            margin-bottom: 10px;
+        }
+        textarea { height: 120px; font-family: monospace; resize: vertical; }
+        button {
+            width: 100%;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        button:active { background-color: #0056b3; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:active { background-color: #545b62; }
+        .count { font-size: 0.9rem; color: #666; margin-bottom: 5px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="section">
+        <label for="urlInput">Option A: Fetch URL directly (CORS Bypass)</label>
+        <input type="text" id="urlInput" placeholder="https://example.com">
+        <button id="fetchBtn">Fetch & Extract</button>
+    </div>
+
+    <div class="section">
+        <label for="rawInput">Option B: Paste Raw Text or HTML Source</label>
+        <textarea id="rawInput" placeholder="Paste text or page source here..."></textarea>
+        <button id="extractRawBtn" class="secondary">Extract From Text</button>
+    </div>
+
+    <div class="section">
+        <div class="count" id="linkCount">Extracted Links (0)</div>
+        <textarea id="output" readonly placeholder="Your links will appear here..."></textarea>
+        <button id="copyBtn">Copy Results</button>
+    </div>
+
+    <script>
+        const urlRegex = /https?:\/\/[^\s"'><`]+/g;
+
+        function extractAndDisplay(text) {
+            const matches = text.match(urlRegex) || [];
+            const uniqueLinks = [...new Set(matches)].map(url => url.replace(/[.,;:)]$/, ''));
+
+            const outputEl = document.getElementById('output');
+            const countEl = document.getElementById('linkCount');
+
+            if (uniqueLinks.length === 0) {
+                outputEl.value = "";
+                countEl.innerText = "Extracted Links (0 found)";
+                alert("No links discovered.");
+                return;
+            }
+
+            outputEl.value = uniqueLinks.join('\n');
+            countEl.innerText = `Extracted Links (${uniqueLinks.length} found)`;
+        }
+
+        document.getElementById('fetchBtn').addEventListener('click', async () => {
+            let url = document.getElementById('urlInput').value.trim();
+            if (!url) return alert("Please enter a URL");
+            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+            const fetchBtn = document.getElementById('fetchBtn');
+            fetchBtn.innerText = "Loading...";
+            
+            try {
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+                const response = await fetch(proxyUrl);
+                if (!response.ok) throw new Error("Network response failed");
+                const data = await response.json();
+                extractAndDisplay(data.contents);
+            } catch (err) {
+                alert("Could not fetch the site directly. Try pasting the page source into Option B!");
+            } finally {
+                fetchBtn.innerText = "Fetch & Extract";
+            }
+        });
+
+        document.getElementById('extractRawBtn').addEventListener('click', () => {
+            const text = document.getElementById('rawInput').value;
+            extractAndDisplay(text);
+        });
+
+        document.getElementById('copyBtn').addEventListener('click', () => {
+            const output = document.getElementById('output');
+            if (!output.value) return;
+            
+            output.select();
+            output.setSelectionRange(0, 99999);
+            
+            navigator.clipboard.writeText(output.value).then(() => {
+                const originalText = document.getElementById('copyBtn').innerText;
+                document.getElementById('copyBtn').innerText = "Copied!";
+                setTimeout(() => { document.getElementById('copyBtn').innerText = originalText; }, 1500);
+            });
+        });
+    </script>
+</body>
+</html>
