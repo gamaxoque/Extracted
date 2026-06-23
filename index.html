@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Blog Post Link Extractor</title>
+    <title>Smart Blog Extractor</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -50,7 +50,7 @@
             margin-bottom: 10px;
             font-family: monospace;
             white-space: pre-line;
-            max-height: 90px;
+            max-height: 100px;
             overflow-y: auto;
         }
         .count { font-size: 0.9rem; color: #666; margin-bottom: 5px; font-weight: bold; }
@@ -62,13 +62,10 @@
         <label for="urlInput">Blog Main Page URL</label>
         <input type="text" id="urlInput" placeholder="https://example.com/blog">
 
-        <label for="postFilterInput">1. Target Post Filter (Identify the entries)</label>
-        <input type="text" id="postFilterInput" placeholder="e.g., /blog/ or /p/ (Leave blank to check ALL homepage links)">
+        <label for="finalFilterInput">Link Filter (What you want to extract from inside posts)</label>
+        <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip, amazon.com (Leave blank for all)">
 
-        <label for="finalFilterInput">2. Final Link Filter (What you want to extract from inside posts)</label>
-        <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip, amazon.com">
-
-        <button id="crawlBtn">Extract From Blog Posts</button>
+        <button id="crawlBtn">Smart Extract From Posts</button>
     </div>
 
     <div class="section">
@@ -90,7 +87,6 @@
             log.scrollTop = log.scrollHeight;
         }
 
-        // Bypasses CORS policy safely using a proxy endpoint
         async function fetchHTML(targetUrl) {
             try {
                 const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, { signal: AbortSignal.timeout(6000) });
@@ -113,70 +109,90 @@
             if (!mainUrl) return alert("Please specify the main blog web address.");
             if (!/^https?:\/\//i.test(mainUrl)) mainUrl = 'https://' + mainUrl;
 
-            const postFilter = document.getElementById('postFilterInput').value.trim().toLowerCase();
             const finalFilter = document.getElementById('finalFilterInput').value.trim().toLowerCase();
 
-            // Clear previous runs
+            let baseDomain;
+            try {
+                baseDomain = new URL(mainUrl).hostname;
+            } catch(e) {
+                return alert("Invalid URL format.");
+            }
+
+            // Clear states
             finalMatches.clear();
             document.getElementById('output').value = "";
             document.getElementById('crawlBtn').disabled = true;
-            document.getElementById('crawlBtn').innerText = "Scanning...";
+            document.getElementById('crawlBtn').innerText = "Analyzing Homepage...";
             
-            logStatus("Step 1: Fetching blog main page...");
+            logStatus("Step 1: Fetching blog homepage...");
 
             try {
                 const mainHtml = await fetchHTML(mainUrl);
                 const homepageLinks = mainHtml.match(urlRegex) || [];
                 
-                // Filter down to unique blog post URLs found on the homepage
-                const blogPostUrls = [...new Set(homepageLinks.map(url => url.replace(/[.,;:)]$/, '')))]
-                    .filter(url => !postFilter || url.toLowerCase().includes(postFilter));
+                // Smart Filter Strategy: 
+                // 1. Must be on the same domain.
+                // 2. Ignore obvious junk/root paths like the homepage itself, login pages, feeds, or assets.
+                const cleanedLinks = homepageLinks.map(url => url.replace(/[.,;:)]$/, ''));
+                
+                const potentialPosts = [...new Set(cleanedLinks)].filter(url => {
+                    try {
+                        const u = new URL(url);
+                        const path = u.pathname.toLowerCase();
+                        
+                        // Rule: Must be same domain
+                        if (u.hostname !== baseDomain) return false;
+                        
+                        // Rule: Ignore root homepage or common asset/nav paths
+                        if (path === "/" || path === "" || path.includes('wp-admin') || path.includes('login') || path.includes('feed') || path.includes('wp-content')) return false;
+                        
+                        return true;
+                    } catch(e) {
+                        return false;
+                    }
+                });
 
-                if (blogPostUrls.length === 0) {
-                    logStatus("❌ No blog post links matched your filter on the homepage.");
+                if (potentialPosts.length === 0) {
+                    logStatus("❌ No internal blog post links detected on the homepage.");
                     document.getElementById('crawlBtn').disabled = false;
-                    document.getElementById('crawlBtn').innerText = "Extract From Blog Posts";
+                    document.getElementById('crawlBtn').innerText = "Smart Extract From Posts";
                     return;
                 }
 
-                logStatus(`Found ${blogPostUrls.length} blog entries to inspect.`);
+                logStatus(`Smart detection filtered out nav links. Found ${potentialPosts.length} potential articles to scan.`);
 
-                // Step 2: Loop through each detected blog entry page
-                for (let i = 0; i < blogPostUrls.length; i++) {
-                    const postUrl = blogPostUrls[i];
-                    logStatus(`[${i + 1}/${blogPostUrls.length}] Inspecting: ${postUrl}`);
+                // Step 2: Loop through each dynamically detected blog entry
+                for (let i = 0; i < potentialPosts.length; i++) {
+                    const postUrl = potentialPosts[i];
+                    logStatus(`[${i + 1}/${potentialPosts.length}] Scanning text in entry: ${postUrl.split('/').pop() || postUrl}`);
 
                     try {
                         const postHtml = await fetchHTML(postUrl);
                         const postLinks = postHtml.match(urlRegex) || [];
                         
-                        // Clean and check links inside this specific post
                         postLinks.forEach(rawUrl => {
                             let cleanUrl = rawUrl.replace(/[.,;:)]$/, '');
                             
-                            // Check if it matches what you are looking for inside the entries
                             if (!finalFilter || cleanUrl.toLowerCase().includes(finalFilter)) {
                                 if (!finalMatches.has(cleanUrl)) {
                                     finalMatches.add(cleanUrl);
-                                    
-                                    // Update the output UI live as they are found
                                     document.getElementById('output').value = Array.from(finalMatches).join('\n');
                                     document.getElementById('linkCount').innerText = `Extracted Target Links (${finalMatches.size})`;
                                 }
                             }
                         });
                     } catch (err) {
-                        logStatus(`⚠️ Could not read post: ${postUrl}`);
+                        logStatus(`⚠️ Skipping post (fetch timeout): ${postUrl}`);
                     }
                 }
 
-                logStatus("🏁 Finished! All entries scanned.");
+                logStatus("🏁 Finished! All detected entries scanned.");
 
             } catch (err) {
-                logStatus("❌ Failed to load the blog homepage.");
+                logStatus("❌ Failed to load or parse the homepage.");
             } finally {
                 document.getElementById('crawlBtn').disabled = false;
-                document.getElementById('crawlBtn').innerText = "Extract From Blog Posts";
+                document.getElementById('crawlBtn').innerText = "Smart Extract From Posts";
             }
         });
 
@@ -186,7 +202,7 @@
             output.select();
             output.setSelectionRange(0, 99999);
             navigator.clipboard.writeText(output.value).then(() => {
-                alert("Copied directly to clipboard!");
+                alert("Copied!");
             });
         });
     </script>
