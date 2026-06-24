@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Blog Extractor</title>
+    <title>Multi-Page Blog Extractor</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -20,7 +20,7 @@
             margin-bottom: 15px;
         }
         label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
-        input[type="text"], textarea {
+        input[type="text"], textarea, select {
             width: 100%;
             box-sizing: border-box;
             padding: 10px;
@@ -29,6 +29,8 @@
             font-size: 1rem;
             margin-bottom: 10px;
         }
+        .row { display: flex; gap: 10px; }
+        .row > div { flex: 1; }
         button {
             width: 100%;
             background-color: #007bff;
@@ -50,7 +52,7 @@
             margin-bottom: 10px;
             font-family: monospace;
             white-space: pre-line;
-            max-height: 100px;
+            max-height: 120px;
             overflow-y: auto;
         }
         .count { font-size: 0.9rem; color: #666; margin-bottom: 5px; font-weight: bold; }
@@ -62,10 +64,24 @@
         <label for="urlInput">Blog Main Page URL</label>
         <input type="text" id="urlInput" placeholder="https://example.com/blog">
 
-        <label for="finalFilterInput">Link Filter (What you want to extract from inside posts)</label>
-        <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip, amazon.com (Leave blank for all)">
+        <div class="row">
+            <div>
+                <label for="pagesInput">Pages to Scan</label>
+                <select id="pagesInput">
+                    <option value="1">Page 1 Only</option>
+                    <option value="2">First 2 Pages</option>
+                    <option value="3">First 3 Pages</option>
+                    <option value="5">First 5 Pages</option>
+                    <option value="10">First 10 Pages</option>
+                </select>
+            </div>
+            <div>
+                <label for="finalFilterInput">Link Filter (Optional)</label>
+                <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip">
+            </div>
+        </div>
 
-        <button id="crawlBtn">Smart Extract From Posts</button>
+        <button id="crawlBtn">Smart Multi-Page Extract</button>
     </div>
 
     <div class="section">
@@ -80,6 +96,7 @@
     <script>
         const urlRegex = /https?:\/\/[^\s"'><`]+/g;
         let finalMatches = new Set();
+        let potentialPosts = new Set();
 
         function logStatus(msg) {
             const log = document.getElementById('statusLog');
@@ -104,12 +121,25 @@
             throw new Error("Failed to fetch.");
         }
 
+        // Helper to format pagination URLs automatically
+        function getPageUrl(baseUrl, pageNum) {
+            if (pageNum === 1) return baseUrl;
+            const cleanBase = baseUrl.replace(/\/$/, ""); // Strip trailing slash
+            
+            // Checks standard formats like /page/2 or ?page=2
+            if (baseUrl.includes('?')) {
+                return `${cleanBase}&page=${pageNum}`;
+            }
+            return `${cleanBase}/page/${pageNum}/`;
+        }
+
         document.getElementById('crawlBtn').addEventListener('click', async () => {
             let mainUrl = document.getElementById('urlInput').value.trim();
             if (!mainUrl) return alert("Please specify the main blog web address.");
             if (!/^https?:\/\//i.test(mainUrl)) mainUrl = 'https://' + mainUrl;
 
             const finalFilter = document.getElementById('finalFilterInput').value.trim().toLowerCase();
+            const maxPages = parseInt(document.getElementById('pagesInput').value);
 
             let baseDomain;
             try {
@@ -118,82 +148,83 @@
                 return alert("Invalid URL format.");
             }
 
-            // Clear states
+            // Reset states
             finalMatches.clear();
+            potentialPosts.clear();
             document.getElementById('output').value = "";
             document.getElementById('crawlBtn').disabled = true;
-            document.getElementById('crawlBtn').innerText = "Analyzing Homepage...";
             
-            logStatus("Step 1: Fetching blog homepage...");
+            // --- STEP 1: GATHER ARTICLES FROM MULTIPLE BLOG PAGES ---
+            for (let p = 1; p <= maxPages; p++) {
+                const currentBlogPageUrl = getPageUrl(mainUrl, p);
+                document.getElementById('crawlBtn').innerText = `Reading Blog Page ${p}/${maxPages}...`;
+                logStatus(`[Blog Page ${p}] Fetching entry index...`);
 
-            try {
-                const mainHtml = await fetchHTML(mainUrl);
-                const homepageLinks = mainHtml.match(urlRegex) || [];
-                
-                // Smart Filter Strategy: 
-                // 1. Must be on the same domain.
-                // 2. Ignore obvious junk/root paths like the homepage itself, login pages, feeds, or assets.
-                const cleanedLinks = homepageLinks.map(url => url.replace(/[.,;:)]$/, ''));
-                
-                const potentialPosts = [...new Set(cleanedLinks)].filter(url => {
-                    try {
-                        const u = new URL(url);
-                        const path = u.pathname.toLowerCase();
-                        
-                        // Rule: Must be same domain
-                        if (u.hostname !== baseDomain) return false;
-                        
-                        // Rule: Ignore root homepage or common asset/nav paths
-                        if (path === "/" || path === "" || path.includes('wp-admin') || path.includes('login') || path.includes('feed') || path.includes('wp-content')) return false;
-                        
-                        return true;
-                    } catch(e) {
-                        return false;
-                    }
-                });
-
-                if (potentialPosts.length === 0) {
-                    logStatus("❌ No internal blog post links detected on the homepage.");
-                    document.getElementById('crawlBtn').disabled = false;
-                    document.getElementById('crawlBtn').innerText = "Smart Extract From Posts";
-                    return;
-                }
-
-                logStatus(`Smart detection filtered out nav links. Found ${potentialPosts.length} potential articles to scan.`);
-
-                // Step 2: Loop through each dynamically detected blog entry
-                for (let i = 0; i < potentialPosts.length; i++) {
-                    const postUrl = potentialPosts[i];
-                    logStatus(`[${i + 1}/${potentialPosts.length}] Scanning text in entry: ${postUrl.split('/').pop() || postUrl}`);
-
-                    try {
-                        const postHtml = await fetchHTML(postUrl);
-                        const postLinks = postHtml.match(urlRegex) || [];
-                        
-                        postLinks.forEach(rawUrl => {
-                            let cleanUrl = rawUrl.replace(/[.,;:)]$/, '');
+                try {
+                    const mainHtml = await fetchHTML(currentBlogPageUrl);
+                    const homepageLinks = mainHtml.match(urlRegex) || [];
+                    const cleanedLinks = homepageLinks.map(url => url.replace(/[.,;:)]$/, ''));
+                    
+                    cleanedLinks.forEach(url => {
+                        try {
+                            const u = new URL(url);
+                            const path = u.pathname.toLowerCase();
                             
-                            if (!finalFilter || cleanUrl.toLowerCase().includes(finalFilter)) {
-                                if (!finalMatches.has(cleanUrl)) {
-                                    finalMatches.add(cleanUrl);
-                                    document.getElementById('output').value = Array.from(finalMatches).join('\n');
-                                    document.getElementById('linkCount').innerText = `Extracted Target Links (${finalMatches.size})`;
-                                }
+                            if (u.hostname === baseDomain && 
+                                path !== "/" && path !== "" && 
+                                !path.includes('wp-admin') && !path.includes('login') && 
+                                !path.includes('feed') && !path.includes('wp-content') &&
+                                !path.includes('/page/')) { // don't add pagination links as articles
+                                
+                                potentialPosts.add(url);
                             }
-                        });
-                    } catch (err) {
-                        logStatus(`⚠️ Skipping post (fetch timeout): ${postUrl}`);
-                    }
+                        } catch(e) {}
+                    });
+                } catch (err) {
+                    logStatus(`⚠️ Could not read Blog Page ${p}. Stopping index collection early.`);
+                    break;
                 }
-
-                logStatus("🏁 Finished! All detected entries scanned.");
-
-            } catch (err) {
-                logStatus("❌ Failed to load or parse the homepage.");
-            } finally {
-                document.getElementById('crawlBtn').disabled = false;
-                document.getElementById('crawlBtn').innerText = "Smart Extract From Posts";
             }
+
+            const postList = Array.from(potentialPosts);
+            if (postList.length === 0) {
+                logStatus("❌ No blog post links detected.");
+                document.getElementById('crawlBtn').disabled = false;
+                document.getElementById('crawlBtn').innerText = "Smart Multi-Page Extract";
+                return;
+            }
+
+            logStatus(`Index complete. Found ${postList.length} total articles across all pages.`);
+
+            // --- STEP 2: SCAN INSIDE ALL DETECTED ARTICLES ---
+            document.getElementById('crawlBtn').innerText = "Scanning Articles...";
+            for (let i = 0; i < postList.length; i++) {
+                const postUrl = postList[i];
+                logStatus(`[Article ${i + 1}/${postList.length}] Scanning: ${postUrl.split('/').pop() || postUrl}`);
+
+                try {
+                    const postHtml = await fetchHTML(postUrl);
+                    const postLinks = postHtml.match(urlRegex) || [];
+                    
+                    postLinks.forEach(rawUrl => {
+                        let cleanUrl = rawUrl.replace(/[.,;:)]$/, '');
+                        
+                        if (!finalFilter || cleanUrl.toLowerCase().includes(finalFilter)) {
+                            if (!finalMatches.has(cleanUrl)) {
+                                finalMatches.add(cleanUrl);
+                                document.getElementById('output').value = Array.from(finalMatches).join('\n');
+                                document.getElementById('linkCount').innerText = `Extracted Target Links (${finalMatches.size})`;
+                            }
+                        }
+                    });
+                } catch (err) {
+                    logStatus(`⚠️ Skipping article (timeout): ${postUrl}`);
+                }
+            }
+
+            logStatus("🏁 Finished! All pages and entries scanned.");
+            document.getElementById('crawlBtn').disabled = false;
+            document.getElementById('crawlBtn').innerText = "Smart Multi-Page Extract";
         });
 
         document.getElementById('copyBtn').addEventListener('click', () => {
