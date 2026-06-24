@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-Page Blog Extractor</title>
+    <title>Mass Blog Post Link Extractor</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -20,7 +20,7 @@
             margin-bottom: 15px;
         }
         label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
-        input[type="text"], textarea, select {
+        input[type="text"], input[type="number"], textarea {
             width: 100%;
             box-sizing: border-box;
             padding: 10px;
@@ -66,30 +66,27 @@
 
         <div class="row">
             <div>
-                <label for="pagesInput">Pages to Scan</label>
-                <select id="pagesInput">
-                    <option value="1">Page 1 Only</option>
-                    <option value="2">First 2 Pages</option>
-                    <option value="3">First 3 Pages</option>
-                    <option value="5">First 5 Pages</option>
-                    <option value="10">First 10 Pages</option>
-                </select>
+                <label for="startPageInput">Start Page</label>
+                <input type="number" id="startPageInput" value="1" min="1">
             </div>
             <div>
-                <label for="finalFilterInput">Link Filter (Optional)</label>
-                <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip">
+                <label for="endPageInput">End Page</label>
+                <input type="number" id="endPageInput" value="5" min="1">
             </div>
         </div>
 
-        <button id="crawlBtn">Smart Multi-Page Extract</button>
+        <label for="finalFilterInput">Link Filter Keyword (Optional)</label>
+        <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip">
+
+        <button id="crawlBtn">Run Mass Extraction</button>
     </div>
 
     <div class="section">
         <label>Live Progress Log</label>
-        <div class="status-box" id="statusLog">Ready to scan...</div>
+        <div class="status-box" id="statusLog">Ready to scale...</div>
 
         <div class="count" id="linkCount">Extracted Target Links (0)</div>
-        <textarea id="output" readonly placeholder="Matching links found inside the blog entries will appear here..."></textarea>
+        <textarea id="output" readonly placeholder="Matching links discovered inside articles will render here..."></textarea>
         <button id="copyBtn">Copy Results</button>
     </div>
 
@@ -118,19 +115,13 @@
                 if (response.ok) return await response.text();
             } catch (e) {}
             
-            throw new Error("Failed to fetch.");
+            throw new Error("Fetch failed.");
         }
 
-        // Helper to format pagination URLs automatically
         function getPageUrl(baseUrl, pageNum) {
             if (pageNum === 1) return baseUrl;
-            const cleanBase = baseUrl.replace(/\/$/, ""); // Strip trailing slash
-            
-            // Checks standard formats like /page/2 or ?page=2
-            if (baseUrl.includes('?')) {
-                return `${cleanBase}&page=${pageNum}`;
-            }
-            return `${cleanBase}/page/${pageNum}/`;
+            const cleanBase = baseUrl.replace(/\/$/, "");
+            return baseUrl.includes('?') ? `${cleanBase}&page=${pageNum}` : `${cleanBase}/page/${pageNum}/`;
         }
 
         document.getElementById('crawlBtn').addEventListener('click', async () => {
@@ -139,7 +130,8 @@
             if (!/^https?:\/\//i.test(mainUrl)) mainUrl = 'https://' + mainUrl;
 
             const finalFilter = document.getElementById('finalFilterInput').value.trim().toLowerCase();
-            const maxPages = parseInt(document.getElementById('pagesInput').value);
+            const startPage = parseInt(document.getElementById('startPageInput').value) || 1;
+            const endPage = parseInt(document.getElementById('endPageInput').value) || startPage;
 
             let baseDomain;
             try {
@@ -148,20 +140,19 @@
                 return alert("Invalid URL format.");
             }
 
-            // Reset states
+            // Reset UI and targets
             finalMatches.clear();
             potentialPosts.clear();
             document.getElementById('output').value = "";
             document.getElementById('crawlBtn').disabled = true;
             
-            // --- STEP 1: GATHER ARTICLES FROM MULTIPLE BLOG PAGES ---
-            for (let p = 1; p <= maxPages; p++) {
-                const currentBlogPageUrl = getPageUrl(mainUrl, p);
-                document.getElementById('crawlBtn').innerText = `Reading Blog Page ${p}/${maxPages}...`;
-                logStatus(`[Blog Page ${p}] Fetching entry index...`);
+            // --- STEP 1: POOL ARTICLES ACROSS CUSTOM PAGINATION BOUNDS ---
+            for (let p = startPage; p <= endPage; p++) {
+                document.getElementById('crawlBtn').innerText = `Indexing Index ${p}/${endPage}...`;
+                logStatus(`[Index Scanner] Processing Blog Page ${p}...`);
 
                 try {
-                    const mainHtml = await fetchHTML(currentBlogPageUrl);
+                    const mainHtml = await fetchHTML(getPageUrl(mainUrl, p));
                     const homepageLinks = mainHtml.match(urlRegex) || [];
                     const cleanedLinks = homepageLinks.map(url => url.replace(/[.,;:)]$/, ''));
                     
@@ -174,33 +165,32 @@
                                 path !== "/" && path !== "" && 
                                 !path.includes('wp-admin') && !path.includes('login') && 
                                 !path.includes('feed') && !path.includes('wp-content') &&
-                                !path.includes('/page/')) { // don't add pagination links as articles
+                                !path.includes('/page/')) {
                                 
                                 potentialPosts.add(url);
                             }
                         } catch(e) {}
                     });
                 } catch (err) {
-                    logStatus(`⚠️ Could not read Blog Page ${p}. Stopping index collection early.`);
-                    break;
+                    logStatus(`⚠️ Could not parse Index Page ${p}. Moving on.`);
                 }
             }
 
             const postList = Array.from(potentialPosts);
             if (postList.length === 0) {
-                logStatus("❌ No blog post links detected.");
+                logStatus("❌ No blog entries detected in this range.");
                 document.getElementById('crawlBtn').disabled = false;
-                document.getElementById('crawlBtn').innerText = "Smart Multi-Page Extract";
+                document.getElementById('crawlBtn').innerText = "Run Mass Extraction";
                 return;
             }
 
-            logStatus(`Index complete. Found ${postList.length} total articles across all pages.`);
+            logStatus(`Index compilation complete. Found ${postList.length} articles to cross-examine.`);
 
-            // --- STEP 2: SCAN INSIDE ALL DETECTED ARTICLES ---
+            // --- STEP 2: DRILL DOWN AND SCAN COLLECTED INDIVIDUAL ENTRIES ---
             document.getElementById('crawlBtn').innerText = "Scanning Articles...";
             for (let i = 0; i < postList.length; i++) {
                 const postUrl = postList[i];
-                logStatus(`[Article ${i + 1}/${postList.length}] Scanning: ${postUrl.split('/').pop() || postUrl}`);
+                logStatus(`[Article ${i + 1}/${postList.length}] Scraping: ${postUrl.split('/').pop() || postUrl}`);
 
                 try {
                     const postHtml = await fetchHTML(postUrl);
@@ -218,13 +208,13 @@
                         }
                     });
                 } catch (err) {
-                    logStatus(`⚠️ Skipping article (timeout): ${postUrl}`);
+                    logStatus(`⚠️ Connection issue skipping text body parsing for: ${postUrl}`);
                 }
             }
 
-            logStatus("🏁 Finished! All pages and entries scanned.");
+            logStatus("🏁 Finished! Custom block sequence successfully completed.");
             document.getElementById('crawlBtn').disabled = false;
-            document.getElementById('crawlBtn').innerText = "Smart Multi-Page Extract";
+            document.getElementById('crawlBtn').innerText = "Run Mass Extraction";
         });
 
         document.getElementById('copyBtn').addEventListener('click', () => {
@@ -233,7 +223,7 @@
             output.select();
             output.setSelectionRange(0, 99999);
             navigator.clipboard.writeText(output.value).then(() => {
-                alert("Copied!");
+                alert("Copied directly to clipboard!");
             });
         });
     </script>
