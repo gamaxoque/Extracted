@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mass Blog Post Link Extractor</title>
+    <title>Precision Blog Post Link Extractor</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -78,28 +78,39 @@
         <label for="finalFilterInput">Link Filter Keyword (Optional)</label>
         <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip">
 
-        <button id="crawlBtn">Run Mass Extraction</button>
+        <button id="crawlBtn">Run Precision Extraction</button>
     </div>
 
     <div class="section">
         <label>Live Progress Log</label>
-        <div class="status-box" id="statusLog">Ready to scale...</div>
+        <div class="status-box" id="statusLog">Ready...</div>
 
-        <div class="count" id="linkCount">Extracted Target Links (0)</div>
-        <textarea id="output" readonly placeholder="Matching links discovered inside articles will render here..."></textarea>
-        <button id="copyBtn">Copy Results</button>
+        <div class="count" id="linkCount">New Links Extracted (0)</div>
+        <textarea id="output" readonly placeholder="Target URLs found inside the actual post bodies will appear here..."></textarea>
+        
+        <div class="row">
+            <div><button id="copyBtn">Copy Results</button></div>
+            <div><button id="downloadBtn" style="background-color: #28a745;">Download .TXT File</button></div>
+        </div>
     </div>
 
     <script>
         const urlRegex = /https?:\/\/[^\s"'><`]+/g;
         let finalMatches = new Set();
         let potentialPosts = new Set();
+        
+        let savedHistory = JSON.parse(localStorage.getItem('scraped_history')) || [];
+        let historySet = new Set(savedHistory);
 
         function logStatus(msg) {
             const log = document.getElementById('statusLog');
             log.innerText += "\n" + msg;
             log.scrollTop = log.scrollHeight;
         }
+
+        window.onload = function() {
+            document.getElementById('statusLog').innerText = `Ready. History memory tracks ${historySet.size} past entries.`;
+        };
 
         async function fetchHTML(targetUrl) {
             try {
@@ -115,7 +126,7 @@
                 if (response.ok) return await response.text();
             } catch (e) {}
             
-            throw new Error("Fetch failed.");
+            throw new Error("Proxy connection failed.");
         }
 
         function getPageUrl(baseUrl, pageNum) {
@@ -126,7 +137,7 @@
 
         document.getElementById('crawlBtn').addEventListener('click', async () => {
             let mainUrl = document.getElementById('urlInput').value.trim();
-            if (!mainUrl) return alert("Please specify the main blog web address.");
+            if (!mainUrl) return alert("Please specify the main blog address.");
             if (!/^https?:\/\//i.test(mainUrl)) mainUrl = 'https://' + mainUrl;
 
             const finalFilter = document.getElementById('finalFilterInput').value.trim().toLowerCase();
@@ -134,89 +145,122 @@
             const endPage = parseInt(document.getElementById('endPageInput').value) || startPage;
 
             let baseDomain;
-            try {
-                baseDomain = new URL(mainUrl).hostname;
-            } catch(e) {
-                return alert("Invalid URL format.");
-            }
+            try { baseDomain = new URL(mainUrl).hostname; } catch(e) { return alert("Invalid URL format."); }
 
-            // Reset UI and targets
             finalMatches.clear();
             potentialPosts.clear();
             document.getElementById('output').value = "";
             document.getElementById('crawlBtn').disabled = true;
             
-            // --- STEP 1: POOL ARTICLES ACROSS CUSTOM PAGINATION BOUNDS ---
+            // --- STEP 1: PRECISION ARTICLE HEADLINE EXTRACTION ---
             for (let p = startPage; p <= endPage; p++) {
                 document.getElementById('crawlBtn').innerText = `Indexing Index ${p}/${endPage}...`;
-                logStatus(`[Index Scanner] Processing Blog Page ${p}...`);
+                logStatus(`[Index Scanner] Dom parsing page elements on Page ${p}...`);
 
                 try {
                     const mainHtml = await fetchHTML(getPageUrl(mainUrl, p));
-                    const homepageLinks = mainHtml.match(urlRegex) || [];
-                    const cleanedLinks = homepageLinks.map(url => url.replace(/[.,;:)]$/, ''));
                     
-                    cleanedLinks.forEach(url => {
+                    // Virtualize the HTML structure to use real selector engines
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(mainHtml, 'text/html');
+                    
+                    // Targets clean semantic container standards common to blog formats
+                    const selectors = 'article h2 a, h2.entry-title a, .post-title a, .entry-title a, article a[href*="/post/"], article a[href*="/blog/"]';
+                    const elements = doc.querySelectorAll(selectors);
+                    
+                    elements.forEach(el => {
+                        let url = el.getAttribute('href');
+                        if (!url) return;
+                        url = url.replace(/[.,;:)]$/, '');
+                        
                         try {
-                            const u = new URL(url);
+                            const u = new URL(url, mainUrl); // handle relative paths automatically
                             const path = u.pathname.toLowerCase();
                             
                             if (u.hostname === baseDomain && 
                                 path !== "/" && path !== "" && 
                                 !path.includes('wp-admin') && !path.includes('login') && 
                                 !path.includes('feed') && !path.includes('wp-content') &&
+                                !path.includes('/tag/') && !path.includes('/category/') &&
                                 !path.includes('/page/')) {
-                                
-                                potentialPosts.add(url);
+                                potentialPosts.add(u.href);
                             }
                         } catch(e) {}
                     });
                 } catch (err) {
-                    logStatus(`⚠️ Could not parse Index Page ${p}. Moving on.`);
+                    logStatus(`⚠️ Could not parse Index Page ${p}: ${err.message}`);
                 }
             }
 
             const postList = Array.from(potentialPosts);
             if (postList.length === 0) {
-                logStatus("❌ No blog entries detected in this range.");
+                logStatus("❌ No isolated blog entries detected in target selector profiles.");
                 document.getElementById('crawlBtn').disabled = false;
-                document.getElementById('crawlBtn').innerText = "Run Mass Extraction";
+                document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
                 return;
             }
 
-            logStatus(`Index compilation complete. Found ${postList.length} articles to cross-examine.`);
+            logStatus(`Success. Isolated exactly ${postList.length} genuine articles. Processing bodies...`);
 
-            // --- STEP 2: DRILL DOWN AND SCAN COLLECTED INDIVIDUAL ENTRIES ---
+            // --- STEP 2: SCAN BODIES ---
             document.getElementById('crawlBtn').innerText = "Scanning Articles...";
+            let skippedCount = 0;
+
             for (let i = 0; i < postList.length; i++) {
                 const postUrl = postList[i];
                 logStatus(`[Article ${i + 1}/${postList.length}] Scraping: ${postUrl.split('/').pop() || postUrl}`);
 
                 try {
                     const postHtml = await fetchHTML(postUrl);
-                    const postLinks = postHtml.match(urlRegex) || [];
+                    
+                    // Isolate content using DOM to ignore headers, footers, sidebars entirely
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(postHtml, 'text/html');
+                    
+                    // Find common container blocks where text content actually lives
+                    const contentArea = doc.querySelector('article, .entry-content, .post-content, .content, body');
+                    const targetText = contentArea ? contentArea.innerHTML : postHtml;
+                    
+                    const postLinks = targetText.match(urlRegex) || [];
                     
                     postLinks.forEach(rawUrl => {
                         let cleanUrl = rawUrl.replace(/[.,;:)]$/, '');
+                        const lowerUrl = cleanUrl.toLowerCase();
                         
-                        if (!finalFilter || cleanUrl.toLowerCase().includes(finalFilter)) {
-                            if (!finalMatches.has(cleanUrl)) {
-                                finalMatches.add(cleanUrl);
-                                document.getElementById('output').value = Array.from(finalMatches).join('\n');
-                                document.getElementById('linkCount').innerText = `Extracted Target Links (${finalMatches.size})`;
+                        const isJunkPath = lowerUrl.includes('/tag/') || 
+                                           lowerUrl.includes('/category/') || 
+                                           lowerUrl.includes('/author/') || 
+                                           lowerUrl.includes('share=') ||
+                                           lowerUrl.includes('/comment-page-') ||
+                                           lowerUrl.includes('wp-content/uploads'); // ignore self-hosted asset templates if necessary
+
+                        if (!isJunkPath) {
+                            if (!finalFilter || lowerUrl.includes(finalFilter)) {
+                                if (!historySet.has(cleanUrl)) {
+                                    finalMatches.add(cleanUrl);
+                                    historySet.add(cleanUrl);
+                                    
+                                    document.getElementById('output').value = Array.from(finalMatches).join('\n');
+                                    document.getElementById('linkCount').innerText = `New Links Extracted (${finalMatches.size})`;
+                                } else {
+                                    skippedCount++;
+                                }
                             }
                         }
                     });
                 } catch (err) {
-                    logStatus(`⚠️ Connection issue skipping text body parsing for: ${postUrl}`);
+                    logStatus(`⚠️ Connection error tracking internal text blocks: ${postUrl}`);
                 }
             }
 
-            logStatus("🏁 Finished! Custom block sequence successfully completed.");
+            localStorage.setItem('scraped_history', JSON.stringify(Array.from(historySet)));
+
+            logStatus(`\n🏁 Finished! Found ${finalMatches.size} target links. Skipped ${skippedCount} items from memory history logs.`);
             document.getElementById('crawlBtn').disabled = false;
-            document.getElementById('crawlBtn').innerText = "Run Mass Extraction";
+            document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
         });
 
+        // Copy Handler
         document.getElementById('copyBtn').addEventListener('click', () => {
             const output = document.getElementById('output');
             if (!output.value) return;
@@ -225,6 +269,26 @@
             navigator.clipboard.writeText(output.value).then(() => {
                 alert("Copied directly to clipboard!");
             });
+        });
+
+        // TXT Download Handler
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            const outputText = document.getElementById('output').value;
+            if (!outputText) return alert("No links available to download yet.");
+
+            const blob = new Blob([outputText], { type: 'text/plain' });
+            const link = document.createElement('a');
+            
+            const timestamp = new Date().toISOString().slice(0,10);
+            link.download = `extracted_links_${timestamp}.txt`;
+            
+            link.href = window.URL.createObjectURL(blob);
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(link.href);
         });
     </script>
 </body>
