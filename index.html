@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Precision Blog Post Link Extractor</title>
+    <title>Mass Blog Post Link Extractor</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -78,7 +78,7 @@
         <label for="finalFilterInput">Link Filter Keyword (Optional)</label>
         <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip">
 
-        <button id="crawlBtn">Run Precision Extraction</button>
+        <button id="crawlBtn">Run Filtered Extraction</button>
     </div>
 
     <div class="section">
@@ -86,7 +86,7 @@
         <div class="status-box" id="statusLog">Ready...</div>
 
         <div class="count" id="linkCount">New Links Extracted (0)</div>
-        <textarea id="output" readonly placeholder="Target URLs found inside the actual post bodies will appear here..."></textarea>
+        <textarea id="output" readonly placeholder="Discovered links will appear here..."></textarea>
         
         <div class="row">
             <div><button id="copyBtn">Copy Results</button></div>
@@ -109,7 +109,7 @@
         }
 
         window.onload = function() {
-            document.getElementById('statusLog').innerText = `Ready. History memory tracks ${historySet.size} past entries.`;
+            document.getElementById('statusLog').innerText = `Ready. Current database contains ${historySet.size} past entries.`;
         };
 
         async function fetchHTML(targetUrl) {
@@ -152,57 +152,55 @@
             document.getElementById('output').value = "";
             document.getElementById('crawlBtn').disabled = true;
             
-            // --- STEP 1: PRECISION ARTICLE HEADLINE EXTRACTION ---
+            // --- STEP 1: ROBUST ARTICLE INDEXING ENGINE ---
             for (let p = startPage; p <= endPage; p++) {
-                document.getElementById('crawlBtn').innerText = `Indexing Index ${p}/${endPage}...`;
-                logStatus(`[Index Scanner] Dom parsing page elements on Page ${p}...`);
+                document.getElementById('crawlBtn').innerText = `Indexing ${p}/${endPage}...`;
+                logStatus(`[Index Scanner] Processing Index Page ${p}...`);
 
                 try {
                     const mainHtml = await fetchHTML(getPageUrl(mainUrl, p));
+                    const rawLinks = mainHtml.match(urlRegex) || [];
                     
-                    // Virtualize the HTML structure to use real selector engines
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(mainHtml, 'text/html');
-                    
-                    // Targets clean semantic container standards common to blog formats
-                    const selectors = 'article h2 a, h2.entry-title a, .post-title a, .entry-title a, article a[href*="/post/"], article a[href*="/blog/"]';
-                    const elements = doc.querySelectorAll(selectors);
-                    
-                    elements.forEach(el => {
-                        let url = el.getAttribute('href');
-                        if (!url) return;
-                        url = url.replace(/[.,;:)]$/, '');
-                        
+                    rawLinks.map(url => url.replace(/[.,;:)]$/, '')).forEach(url => {
                         try {
-                            const u = new URL(url, mainUrl); // handle relative paths automatically
+                            const u = new URL(url);
                             const path = u.pathname.toLowerCase();
                             
-                            if (u.hostname === baseDomain && 
-                                path !== "/" && path !== "" && 
-                                !path.includes('wp-admin') && !path.includes('login') && 
-                                !path.includes('feed') && !path.includes('wp-content') &&
-                                !path.includes('/tag/') && !path.includes('/category/') &&
-                                !path.includes('/page/')) {
-                                potentialPosts.add(u.href);
+                            // Ensure it stays on the target domain
+                            if (u.hostname === baseDomain) {
+                                // Dynamic block list to intercept archive/template layouts
+                                const isStructure = path === "/" || path === "" ||
+                                                    path.includes('/tag/') || 
+                                                    path.includes('/category/') || 
+                                                    path.includes('/author/') || 
+                                                    path.includes('/page/') ||
+                                                    path.includes('wp-admin') ||
+                                                    path.includes('wp-content') ||
+                                                    path.includes('login') ||
+                                                    path.includes('feed');
+                                
+                                if (!isStructure) {
+                                    potentialPosts.add(url);
+                                }
                             }
                         } catch(e) {}
                     });
                 } catch (err) {
-                    logStatus(`⚠️ Could not parse Index Page ${p}: ${err.message}`);
+                    logStatus(`⚠️ Skipping Index Page ${p} due to error.`);
                 }
             }
 
             const postList = Array.from(potentialPosts);
             if (postList.length === 0) {
-                logStatus("❌ No isolated blog entries detected in target selector profiles.");
+                logStatus("❌ No unique internal paths discovered. Try checking your root address format.");
                 document.getElementById('crawlBtn').disabled = false;
-                document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
+                document.getElementById('crawlBtn').innerText = "Run Filtered Extraction";
                 return;
             }
 
-            logStatus(`Success. Isolated exactly ${postList.length} genuine articles. Processing bodies...`);
+            logStatus(`Success. Found ${postList.length} possible content pages. Extracting inner links...`);
 
-            // --- STEP 2: SCAN BODIES ---
+            // --- STEP 2: BODY LINKS DISCOVERY & SANITIZATION ---
             document.getElementById('crawlBtn').innerText = "Scanning Articles...";
             let skippedCount = 0;
 
@@ -212,27 +210,22 @@
 
                 try {
                     const postHtml = await fetchHTML(postUrl);
-                    
-                    // Isolate content using DOM to ignore headers, footers, sidebars entirely
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(postHtml, 'text/html');
-                    
-                    // Find common container blocks where text content actually lives
-                    const contentArea = doc.querySelector('article, .entry-content, .post-content, .content, body');
-                    const targetText = contentArea ? contentArea.innerHTML : postHtml;
-                    
-                    const postLinks = targetText.match(urlRegex) || [];
+                    const postLinks = postHtml.match(urlRegex) || [];
                     
                     postLinks.forEach(rawUrl => {
                         let cleanUrl = rawUrl.replace(/[.,;:)]$/, '');
                         const lowerUrl = cleanUrl.toLowerCase();
                         
+                        // Strict filter blocks navigation components from bleeding into results
                         const isJunkPath = lowerUrl.includes('/tag/') || 
                                            lowerUrl.includes('/category/') || 
                                            lowerUrl.includes('/author/') || 
                                            lowerUrl.includes('share=') ||
+                                           lowerUrl.includes('/page/') ||
                                            lowerUrl.includes('/comment-page-') ||
-                                           lowerUrl.includes('wp-content/uploads'); // ignore self-hosted asset templates if necessary
+                                           lowerUrl.includes('wp-json') ||
+                                           lowerUrl.includes('wp-includes') ||
+                                           lowerUrl.includes('themes/');
 
                         if (!isJunkPath) {
                             if (!finalFilter || lowerUrl.includes(finalFilter)) {
@@ -249,15 +242,15 @@
                         }
                     });
                 } catch (err) {
-                    logStatus(`⚠️ Connection error tracking internal text blocks: ${postUrl}`);
+                    logStatus(`⚠️ Could not reach page: ${postUrl}`);
                 }
             }
 
             localStorage.setItem('scraped_history', JSON.stringify(Array.from(historySet)));
 
-            logStatus(`\n🏁 Finished! Found ${finalMatches.size} target links. Skipped ${skippedCount} items from memory history logs.`);
+            logStatus(`\n🏁 Finished! Found ${finalMatches.size} new target links. Skipped ${skippedCount} duplicates from history.`);
             document.getElementById('crawlBtn').disabled = false;
-            document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
+            document.getElementById('crawlBtn').innerText = "Run Filtered Extraction";
         });
 
         // Copy Handler
