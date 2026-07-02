@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mass Blog Post Link Extractor</title>
+    <title>Advanced Blog Link Extractor</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -41,6 +41,7 @@
             font-weight: bold;
             border-radius: 6px;
             cursor: pointer;
+            margin-bottom: 5px;
         }
         button:disabled { background-color: #cccccc; cursor: not-allowed; }
         .status-box {
@@ -56,6 +57,18 @@
             overflow-y: auto;
         }
         .count { font-size: 0.9rem; color: #666; margin-bottom: 5px; font-weight: bold; }
+        .history-controls {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .checkbox-container { display: flex; align-items: center; gap: 5px; font-size: 0.9rem; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -75,10 +88,20 @@
             </div>
         </div>
 
-        <label for="finalFilterInput">Link Filter Keyword (Optional)</label>
-        <input type="text" id="finalFilterInput" placeholder="e.g., download, .zip">
+        <label for="finalFilterInput">Strict 'AND' Filters (Comma-Separated, e.g., 2026, download, .zip)</label>
+        <input type="text" id="finalFilterInput" placeholder="All conditions must be met for a link to display">
 
-        <button id="crawlBtn">Run Precision Hyperlink Extraction</button>
+        <button id="crawlBtn">Run Precision Extraction</button>
+    </div>
+
+    <div class="history-controls">
+        <div class="checkbox-container">
+            <input type="checkbox" id="commitHistoryToggle" checked>
+            <label for="commitHistoryToggle" style="margin:0; display:inline;">Save findings to history database</label>
+        </div>
+        <div style="width: 150px;">
+            <button id="clearHistoryBtn" style="background-color: #dc3545; padding: 6px; font-size: 0.85rem; margin:0;">Wipe History Cache</button>
+        </div>
     </div>
 
     <div class="section">
@@ -86,7 +109,7 @@
         <div class="status-box" id="statusLog">Ready...</div>
 
         <div class="count" id="linkCount">New External Links Extracted (0)</div>
-        <textarea id="output" readonly placeholder="Target external links will appear here..."></textarea>
+        <textarea id="output" readonly placeholder="Target links will appear here..."></textarea>
         
         <div class="row">
             <div><button id="copyBtn">Copy Results</button></div>
@@ -107,9 +130,20 @@
             log.scrollTop = log.scrollHeight;
         }
 
-        window.onload = function() {
-            document.getElementById('statusLog').innerText = `Ready. History memory tracks ${historySet.size} past items.`;
-        };
+        function updateHistoryDisplay() {
+            document.getElementById('statusLog').innerText = `Ready. History database is tracking ${historySet.size} items.`;
+        }
+
+        window.onload = updateHistoryDisplay;
+
+        document.getElementById('clearHistoryBtn').addEventListener('click', () => {
+            if (confirm("Are you sure you want to completely clear your history database?")) {
+                localStorage.removeItem('scraped_history');
+                historySet.clear();
+                updateHistoryDisplay();
+                logStatus("🗑️ History database successfully cleared!");
+            }
+        });
 
         async function fetchHTML(targetUrl) {
             try {
@@ -139,9 +173,12 @@
             if (!mainUrl) return alert("Please specify the main blog address.");
             if (!/^https?:\/\//i.test(mainUrl)) mainUrl = 'https://' + mainUrl;
 
-            const finalFilter = document.getElementById('finalFilterInput').value.trim().toLowerCase();
+            const filterInput = document.getElementById('finalFilterInput').value.trim().toLowerCase();
+            const filters = filterInput ? filterInput.split(',').map(f => f.trim()).filter(f => f.length > 0) : [];
+            
             const startPage = parseInt(document.getElementById('startPageInput').value) || 1;
             const endPage = parseInt(document.getElementById('endPageInput').value) || startPage;
+            const shouldCommit = document.getElementById('commitHistoryToggle').checked;
 
             let baseDomain;
             try { baseDomain = new URL(mainUrl).hostname; } catch(e) { return alert("Invalid URL format."); }
@@ -151,14 +188,12 @@
             document.getElementById('output').value = "";
             document.getElementById('crawlBtn').disabled = true;
             
-            // --- STEP 1: INDEX POST LINK TARGETS ONLY ---
             for (let p = startPage; p <= endPage; p++) {
                 document.getElementById('crawlBtn').innerText = `Indexing ${p}/${endPage}...`;
                 logStatus(`[Index Scanner] Processing Index Page ${p}...`);
 
                 try {
                     const mainHtml = await fetchHTML(getPageUrl(mainUrl, p));
-                    
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(mainHtml, 'text/html');
                     const links = doc.querySelectorAll('a[href]');
@@ -186,21 +221,20 @@
                         } catch(e) {}
                     });
                 } catch (err) {
-                    logStatus(`⚠️ Skipping Index Page ${p} due to error.`);
+                    logStatus(`⚠️ Skipping Index Page ${p} due to connection error.`);
                 }
             }
 
             const postList = Array.from(potentialPosts);
             if (postList.length === 0) {
-                logStatus("❌ No content page layouts discovered.");
+                logStatus("❌ No content paths discovered.");
                 document.getElementById('crawlBtn').disabled = false;
-                document.getElementById('crawlBtn').innerText = "Run Precision Hyperlink Extraction";
+                document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
                 return;
             }
 
-            logStatus(`Success. Found ${postList.length} genuine articles. Extracting target EXTERNAL links...`);
+            logStatus(`Success. Scanning ${postList.length} articles for target matches...`);
 
-            // --- STEP 2: PARSE CLICKABLE EXTERNAL TARGET LINKS ONLY ---
             document.getElementById('crawlBtn').innerText = "Scanning Articles...";
             let skippedCount = 0;
 
@@ -210,7 +244,6 @@
 
                 try {
                     const postHtml = await fetchHTML(postUrl);
-                    
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(postHtml, 'text/html');
                     const links = doc.querySelectorAll('a[href]');
@@ -218,27 +251,30 @@
                     links.forEach(link => {
                         try {
                             const hrefAttr = link.getAttribute('href');
-                            // Ignore structural layout anchors
                             if (hrefAttr.startsWith('#') || hrefAttr.startsWith('javascript:')) return;
 
                             const u = new URL(hrefAttr, postUrl);
                             const cleanUrl = u.href;
                             const lowerUrl = cleanUrl.toLowerCase();
                             
-                            // 💡 THE ULTIMATE BLOCK: If it points back to the blog domain itself, IGNORE IT.
                             if (u.hostname === baseDomain) return;
 
-                            // Strict filter blocks general external social share layouts
                             const isJunkPath = lowerUrl.includes('facebook.com/sharer') || 
                                                lowerUrl.includes('twitter.com/intent') || 
                                                lowerUrl.includes('linkedin.com/share') ||
                                                lowerUrl.includes('pinterest.com/pin/');
 
                             if (!isJunkPath) {
-                                if (!finalFilter || lowerUrl.includes(finalFilter)) {
+                                // 💡 CHANGED TO STRICT 'EVERY' FOR MANDATORY 'AND' LOGIC
+                                let matchesFilter = true;
+                                if (filters.length > 0) {
+                                    matchesFilter = filters.every(f => lowerUrl.includes(f));
+                                }
+
+                                if (matchesFilter) {
                                     if (!historySet.has(cleanUrl)) {
                                         finalMatches.add(cleanUrl);
-                                        historySet.add(cleanUrl);
+                                        if (shouldCommit) historySet.add(cleanUrl);
                                         
                                         document.getElementById('output').value = Array.from(finalMatches).join('\n');
                                         document.getElementById('linkCount').innerText = `New External Links Extracted (${finalMatches.size})`;
@@ -254,11 +290,13 @@
                 }
             }
 
-            localStorage.setItem('scraped_history', JSON.stringify(Array.from(historySet)));
+            if (shouldCommit) {
+                localStorage.setItem('scraped_history', JSON.stringify(Array.from(historySet)));
+            }
 
-            logStatus(`\n🏁 Finished! Found ${finalMatches.size} isolated external links. Skipped ${skippedCount} items from history.`);
+            logStatus(`\n🏁 Finished! Found ${finalMatches.size} unique external links. Skipped ${skippedCount} items from history database entries.`);
             document.getElementById('crawlBtn').disabled = false;
-            document.getElementById('crawlBtn').innerText = "Run Precision Hyperlink Extraction";
+            document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
         });
 
         // Copy Handler
