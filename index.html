@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Advanced Blog Link Extractor</title>
+    <title>Sitemap Precision Link Extractor</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -20,7 +20,7 @@
             margin-bottom: 15px;
         }
         label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
-        input[type="text"], input[type="number"], textarea {
+        input[type="text"], textarea {
             width: 100%;
             box-sizing: border-box;
             padding: 10px;
@@ -33,7 +33,7 @@
         .row > div { flex: 1; }
         button {
             width: 100%;
-            background-color: #007bff;
+            background-color: #28a745;
             color: white;
             border: none;
             padding: 12px;
@@ -53,7 +53,7 @@
             margin-bottom: 10px;
             font-family: monospace;
             white-space: pre-line;
-            max-height: 120px;
+            max-height: 150px;
             overflow-y: auto;
         }
         .count { font-size: 0.9rem; color: #666; margin-bottom: 5px; font-weight: bold; }
@@ -74,24 +74,16 @@
 <body>
 
     <div class="section">
-        <label for="urlInput">Blog Main Page URL</label>
-        <input type="text" id="urlInput" placeholder="https://example.com/blog">
+        <label for="sitemapInput">Blog Sitemap URL</label>
+        <input type="text" id="sitemapInput" placeholder="e.g., https://example.com/post-sitemap.xml">
 
-        <div class="row">
-            <div>
-                <label for="startPageInput">Start Page</label>
-                <input type="number" id="startPageInput" value="1" min="1">
-            </div>
-            <div>
-                <label for="endPageInput">End Page</label>
-                <input type="number" id="endPageInput" value="2" min="1">
-            </div>
-        </div>
+        <label for="postFilterInput">Post URL Must Contain (e.g., /2026/)</label>
+        <input type="text" id="postFilterInput" value="/2026/" placeholder="Filters out older archive posts entirely">
 
-        <label for="finalFilterInput">Strict 'AND' Filters (Comma-Separated, e.g., 2026, download, .zip)</label>
-        <input type="text" id="finalFilterInput" placeholder="All conditions must be met for a link to display">
+        <label for="finalFilterInput">Inner Links Must Contain ('AND' Comma-Separated, e.g., download, .zip)</label>
+        <input type="text" id="finalFilterInput" placeholder="Leave blank to grab ALL links inside matching posts">
 
-        <button id="crawlBtn">Run Precision Extraction</button>
+        <button id="crawlBtn" style="background-color: #007bff;">Run Sitemap Extraction</button>
     </div>
 
     <div class="history-controls">
@@ -99,8 +91,8 @@
             <input type="checkbox" id="commitHistoryToggle" checked>
             <label for="commitHistoryToggle" style="margin:0; display:inline;">Save findings to history database</label>
         </div>
-        <div style="width: 150px;">
-            <button id="clearHistoryBtn" style="background-color: #dc3545; padding: 6px; font-size: 0.85rem; margin:0;">Wipe History Cache</button>
+        <div>
+            <button id="clearHistoryBtn" style="background-color: #dc3545; padding: 6px; font-size: 0.85rem; margin:0; width:auto;">Wipe History Cache</button>
         </div>
     </div>
 
@@ -109,11 +101,11 @@
         <div class="status-box" id="statusLog">Ready...</div>
 
         <div class="count" id="linkCount">New External Links Extracted (0)</div>
-        <textarea id="output" readonly placeholder="Target links will appear here..."></textarea>
+        <textarea id="output" readonly style="height: 200px;" placeholder="Target links found inside matching sitemap posts will appear here..."></textarea>
         
         <div class="row">
-            <div><button id="copyBtn">Copy Results</button></div>
-            <div><button id="downloadBtn" style="background-color: #28a745;">Download .TXT File</button></div>
+            <div><button id="copyBtn" style="background-color: #6c757d;">Copy Results</button></div>
+            <div><button id="downloadBtn">Download .TXT File</button></div>
         </div>
     </div>
 
@@ -131,23 +123,23 @@
         }
 
         function updateHistoryDisplay() {
-            document.getElementById('statusLog').innerText = `Ready. History database is tracking ${historySet.size} items.`;
+            document.getElementById('statusLog').innerText = `Ready. History database tracks ${historySet.size} past items.`;
         }
 
         window.onload = updateHistoryDisplay;
 
         document.getElementById('clearHistoryBtn').addEventListener('click', () => {
-            if (confirm("Are you sure you want to completely clear your history database?")) {
+            if (confirm("Clear your history database?")) {
                 localStorage.removeItem('scraped_history');
                 historySet.clear();
                 updateHistoryDisplay();
-                logStatus("🗑️ History database successfully cleared!");
+                logStatus("🗑️ History cleared!");
             }
         });
 
         async function fetchHTML(targetUrl) {
             try {
-                const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, { signal: AbortSignal.timeout(6000) });
+                const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, { signal: AbortSignal.timeout(8000) });
                 if (response.ok) {
                     const data = await response.json();
                     return data.contents;
@@ -155,92 +147,84 @@
             } catch (e) {}
 
             try {
-                const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, { signal: AbortSignal.timeout(6000) });
+                const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, { signal: AbortSignal.timeout(8000) });
                 if (response.ok) return await response.text();
             } catch (e) {}
             
             throw new Error("Proxy connection failed.");
         }
 
-        function getPageUrl(baseUrl, pageNum) {
-            if (pageNum === 1) return baseUrl;
-            const cleanBase = baseUrl.replace(/\/$/, "");
-            return baseUrl.includes('?') ? `${cleanBase}&page=${pageNum}` : `${cleanBase}/page/${pageNum}/`;
-        }
-
         document.getElementById('crawlBtn').addEventListener('click', async () => {
-            let mainUrl = document.getElementById('urlInput').value.trim();
-            if (!mainUrl) return alert("Please specify the main blog address.");
-            if (!/^https?:\/\//i.test(mainUrl)) mainUrl = 'https://' + mainUrl;
+            let sitemapUrl = document.getElementById('sitemapInput').value.trim();
+            if (!sitemapUrl) return alert("Please specify the sitemap web address.");
+            if (!/^https?:\/\//i.test(sitemapUrl)) sitemapUrl = 'https://' + sitemapUrl;
 
-            const filterInput = document.getElementById('finalFilterInput').value.trim().toLowerCase();
-            const filters = filterInput ? filterInput.split(',').map(f => f.trim()).filter(f => f.length > 0) : [];
-            
-            const startPage = parseInt(document.getElementById('startPageInput').value) || 1;
-            const endPage = parseInt(document.getElementById('endPageInput').value) || startPage;
+            const postFilter = document.getElementById('postFilterInput').value.trim().toLowerCase();
+            const linkFilterInput = document.getElementById('finalFilterInput').value.trim().toLowerCase();
+            const linkFilters = linkFilterInput ? linkFilterInput.split(',').map(f => f.trim()).filter(f => f.length > 0) : [];
             const shouldCommit = document.getElementById('commitHistoryToggle').checked;
 
             let baseDomain;
-            try { baseDomain = new URL(mainUrl).hostname; } catch(e) { return alert("Invalid URL format."); }
+            try { baseDomain = new URL(sitemapUrl).hostname; } catch(e) { return alert("Invalid URL format."); }
 
             finalMatches.clear();
             potentialPosts.clear();
             document.getElementById('output').value = "";
             document.getElementById('crawlBtn').disabled = true;
             
-            for (let p = startPage; p <= endPage; p++) {
-                document.getElementById('crawlBtn').innerText = `Indexing ${p}/${endPage}...`;
-                logStatus(`[Index Scanner] Processing Index Page ${p}...`);
+            // --- STEP 1: PARSE THE SITEMAP XML ---
+            document.getElementById('crawlBtn').innerText = "Reading Sitemap...";
+            logStatus(`[Sitemap Engine] Fetching and parsing XML structure: ${sitemapUrl}`);
 
-                try {
-                    const mainHtml = await fetchHTML(getPageUrl(mainUrl, p));
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(mainHtml, 'text/html');
-                    const links = doc.querySelectorAll('a[href]');
-                    
-                    links.forEach(link => {
-                        try {
-                            const u = new URL(link.getAttribute('href'), mainUrl);
-                            const path = u.pathname.toLowerCase();
-                            
-                            if (u.hostname === baseDomain) {
-                                const isStructure = path === "/" || path === "" ||
-                                                    path.includes('/tag/') || 
-                                                    path.includes('/category/') || 
-                                                    path.includes('/author/') || 
-                                                    path.includes('/page/') ||
-                                                    path.includes('wp-admin') ||
-                                                    path.includes('wp-content') ||
-                                                    path.includes('login') ||
-                                                    path.includes('feed');
-                                
-                                if (!isStructure) {
-                                    potentialPosts.add(u.href);
-                                }
-                            }
-                        } catch(e) {}
+            try {
+                const sitemapData = await fetchHTML(sitemapUrl);
+                
+                // Use DOMParser to handle the sitemap as standard XML data
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(sitemapData, "text/xml");
+                const locations = xmlDoc.getElementsByTagName("loc");
+
+                if (locations.length === 0) {
+                    // Fallback in case proxy treated XML string as flat text string
+                    logStatus("⚠️ Strict XML parsing yielded 0 rows. Attempting text regex scanner fallback...");
+                    const urlsFound = sitemapData.match(/https?:\/\/[^\s"'><`]+/g) || [];
+                    urlsFound.forEach(u => {
+                        if (u.includes(baseDomain) && (!postFilter || u.toLowerCase().includes(postFilter))) {
+                            potentialPosts.add(u);
+                        }
                     });
-                } catch (err) {
-                    logStatus(`⚠️ Skipping Index Page ${p} due to connection error.`);
+                } else {
+                    for (let i = 0; i < locations.length; i++) {
+                        const postUrl = locations[i].textContent.trim();
+                        if (!postFilter || postUrl.toLowerCase().includes(postFilter)) {
+                            potentialPosts.add(postUrl);
+                        }
+                    }
                 }
+            } catch (err) {
+                logStatus(`❌ Fatal Error trying to parse sitemap source: ${err.message}`);
+                document.getElementById('crawlBtn').disabled = false;
+                document.getElementById('crawlBtn').innerText = "Run Sitemap Extraction";
+                return;
             }
 
             const postList = Array.from(potentialPosts);
             if (postList.length === 0) {
-                logStatus("❌ No content paths discovered.");
+                logStatus(`❌ Completed mapping. Found 0 posts matching filter "${postFilter}" inside this file.`);
                 document.getElementById('crawlBtn').disabled = false;
-                document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
+                document.getElementById('crawlBtn').innerText = "Run Sitemap Extraction";
                 return;
             }
 
-            logStatus(`Success. Scanning ${postList.length} articles for target matches...`);
+            logStatus(`🎯 Blueprint success! Isolated exactly ${postList.length} matches from the sitemap. Commencing content check...`);
 
-            document.getElementById('crawlBtn').innerText = "Scanning Articles...";
+            // --- STEP 2: SCAN THE TARGETED PAGES ---
+            document.getElementById('crawlBtn').innerText = "Scanning targeted posts...";
             let skippedCount = 0;
 
             for (let i = 0; i < postList.length; i++) {
                 const postUrl = postList[i];
-                logStatus(`[Article ${i + 1}/${postList.length}] Scraping: ${postUrl.split('/').pop() || postUrl}`);
+                logStatus(`[Post ${i + 1}/${postList.length}] Scraping: ${postUrl.split('/').pop() || postUrl}`);
 
                 try {
                     const postHtml = await fetchHTML(postUrl);
@@ -257,6 +241,7 @@
                             const cleanUrl = u.href;
                             const lowerUrl = cleanUrl.toLowerCase();
                             
+                            // Skip links tracking inside its own home domain
                             if (u.hostname === baseDomain) return;
 
                             const isJunkPath = lowerUrl.includes('facebook.com/sharer') || 
@@ -265,10 +250,9 @@
                                                lowerUrl.includes('pinterest.com/pin/');
 
                             if (!isJunkPath) {
-                                // 💡 CHANGED TO STRICT 'EVERY' FOR MANDATORY 'AND' LOGIC
                                 let matchesFilter = true;
-                                if (filters.length > 0) {
-                                    matchesFilter = filters.every(f => lowerUrl.includes(f));
+                                if (linkFilters.length > 0) {
+                                    matchesFilter = linkFilters.every(f => lowerUrl.includes(f));
                                 }
 
                                 if (matchesFilter) {
@@ -294,9 +278,9 @@
                 localStorage.setItem('scraped_history', JSON.stringify(Array.from(historySet)));
             }
 
-            logStatus(`\n🏁 Finished! Found ${finalMatches.size} unique external links. Skipped ${skippedCount} items from history database entries.`);
+            logStatus(`\n🏁 Finished! Found ${finalMatches.size} target links across your sitemap targets. Skipped ${skippedCount} duplicates from history.`);
             document.getElementById('crawlBtn').disabled = false;
-            document.getElementById('crawlBtn').innerText = "Run Precision Extraction";
+            document.getElementById('crawlBtn').innerText = "Run Sitemap Extraction";
         });
 
         // Copy Handler
